@@ -17,6 +17,7 @@ import com.limelight.ui.AdapterFragment;
 import com.limelight.ui.AdapterFragmentCallbacks;
 import com.limelight.utils.CacheHelper;
 import com.limelight.utils.Dialog;
+import com.limelight.utils.ResolutionSyncRequester;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
@@ -460,6 +461,8 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                                 app.app, managerBinder, new Runnable() {
                             @Override
                             public void run() {
+                                ResolutionSyncRequester.resetResolution(AppView.this, AppView.this.computer.activeAddress);
+
                                 // Trigger a poll immediately
                                 suspendGridUpdates = false;
                                 if (poller != null) {

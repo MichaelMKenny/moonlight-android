@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+<PreferenceScreen xmlns:tools="http://schemas.android.com/tools"
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:seekbar="http://schemas.moonlight-stream.com/apk/res/seekbar">
 
     <PreferenceCategory android:title="@string/category_basic_settings"
@@ -203,5 +204,45 @@
             android:title="@string/title_enable_post_stream_toast"
             android:summary="@string/summary_enable_post_stream_toast"
             android:defaultValue="false"/>
+    </PreferenceCategory>
+    <PreferenceCategory android:title="Resolution Sync">
+
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_enable_resolution_sync"
+            android:title="Enable Resolution Sync" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_should_sync_resolution"
+            android:title="Should sync custom resolution" />
+        <EditTextPreference
+            android:inputType="number"
+            android:key="sync_width"
+            android:selectAllOnFocus="true"
+            android:singleLine="true"
+            android:title="Sync width" />
+        <EditTextPreference
+            android:defaultValue=""
+            android:inputType="number"
+            android:key="sync_height"
+            android:selectAllOnFocus="true"
+            android:singleLine="true"
+            android:title="Sync height" />
+        <ListPreference
+            android:defaultValue="1"
+            android:entries="@array/pointer_speed_names"
+            android:entryValues="@array/pointer_speed_values"
+            android:key="pointer_speed"
+            android:title="Pointer speed" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_disable_pointer_precision"
+            android:title="Disable mouse acceleration" />
+        <EditTextPreference
+            android:inputType="number"
+            android:key="scroll_wheel_lines"
+            android:selectAllOnFocus="true"
+            android:singleLine="true"
+            android:title="Scroll wheel lines" />
     </PreferenceCategory>
 </PreferenceScreen>

@@ -30,6 +30,7 @@ import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamView;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.NetHelper;
+import com.limelight.utils.ResolutionSyncRequester;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
@@ -59,6 +60,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.SystemClock;
+import android.preference.PreferenceManager;
 import android.util.Rational;
 import android.view.Display;
 import android.view.InputDevice;
@@ -84,6 +86,22 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.Locale;
 
+class Resolution {
+    public int width;
+    public int height;
+
+    Resolution(Context context) {
+        PreferenceConfiguration defaultPrefs = PreferenceConfiguration.readPreferences(context);
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        if (prefs.getBoolean("checkbox_should_sync_resolution", false)) {
+            width = Integer.parseInt(prefs.getString("sync_width", String.valueOf(defaultPrefs.width)));
+            height = Integer.parseInt(prefs.getString("sync_height", String.valueOf(defaultPrefs.height)));
+        } else {
+            width = defaultPrefs.width;
+            height = defaultPrefs.height;
+        }
+    }
+}
 
 public class Game extends Activity implements SurfaceHolder.Callback,
     OnGenericMotionListener, OnTouchListener, NvConnectionListener, EvdevListener,
@@ -112,6 +130,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
+
+    private Resolution resolution;
 
     private NvConnection conn;
     private SpinnerDialog spinner;
@@ -210,11 +230,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         spinner = SpinnerDialog.displayDialog(this, getResources().getString(R.string.conn_establishing_title),
                 getResources().getString(R.string.conn_establishing_msg), true);
 
+        resolution = new Resolution(this);
+
         // Read the stream preferences
         prefConfig = PreferenceConfiguration.readPreferences(this);
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
 
-        if (prefConfig.stretchVideo || shouldIgnoreInsetsForResolution(prefConfig.width, prefConfig.height)) {
+        if (prefConfig.stretchVideo || shouldIgnoreInsetsForResolution(resolution.width, resolution.height)) {
             // Allow the activity to layout under notches if the fill-screen option
             // was turned on by the user or it's a full-screen native resolution
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -456,7 +478,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
 
         StreamConfiguration config = new StreamConfiguration.Builder()
-                .setResolution(prefConfig.width, prefConfig.height)
+                .setResolution(resolution.width, resolution.height)
                 .setLaunchRefreshRate(prefConfig.fps)
                 .setRefreshRate(chosenFrameRate)
                 .setApp(new NvApp(appName != null ? appName : "app", appId, willStreamHdr))
@@ -583,7 +605,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     // than crashing.
                     enterPictureInPictureMode(
                             new PictureInPictureParams.Builder()
-                                    .setAspectRatio(new Rational(prefConfig.width, prefConfig.height))
+                                    .setAspectRatio(new Rational(resolution.width, resolution.height))
                                     .setSourceRectHint(new Rect(
                                             streamView.getLeft(), streamView.getTop(),
                                             streamView.getRight(), streamView.getBottom()))
@@ -655,19 +677,19 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // On M, we can explicitly set the optimal display mode
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Display.Mode bestMode = display.getMode();
-            boolean isNativeResolutionStream = PreferenceConfiguration.isNativeResolution(prefConfig.width, prefConfig.height);
+            boolean isNativeResolutionStream = PreferenceConfiguration.isNativeResolution(resolution.width, resolution.height);
             boolean refreshRateIsGood = isRefreshRateGoodMatch(bestMode.getRefreshRate());
             for (Display.Mode candidate : display.getSupportedModes()) {
                 boolean refreshRateReduced = candidate.getRefreshRate() < bestMode.getRefreshRate();
                 boolean resolutionReduced = candidate.getPhysicalWidth() < bestMode.getPhysicalWidth() ||
                         candidate.getPhysicalHeight() < bestMode.getPhysicalHeight();
-                boolean resolutionFitsStream = candidate.getPhysicalWidth() >= prefConfig.width &&
-                        candidate.getPhysicalHeight() >= prefConfig.height;
+                boolean resolutionFitsStream = candidate.getPhysicalWidth() >= resolution.width &&
+                        candidate.getPhysicalHeight() >= resolution.height;
 
                 LimeLog.info("Examining display mode: "+candidate.getPhysicalWidth()+"x"+
                         candidate.getPhysicalHeight()+"x"+candidate.getRefreshRate());
 
-                if (candidate.getPhysicalWidth() > 4096 && prefConfig.width <= 4096) {
+                if (candidate.getPhysicalWidth() > 4096 && resolution.width <= 4096) {
                     // Avoid resolutions options above 4K to be safe
                     continue;
                 }
@@ -675,7 +697,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 // On non-4K streams, we force the resolution to never change unless it's above
                 // 60 FPS, which may require a resolution reduction due to HDMI bandwidth limitations,
                 // or it's a native resolution stream.
-                if (prefConfig.width < 3840 && prefConfig.fps <= 60 && !isNativeResolutionStream) {
+                if (resolution.width < 3840 && prefConfig.fps <= 60 && !isNativeResolutionStream) {
                     if (display.getMode().getPhysicalWidth() != candidate.getPhysicalWidth() ||
                             display.getMode().getPhysicalHeight() != candidate.getPhysicalHeight()) {
                         continue;
@@ -766,7 +788,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             display.getSize(screenSize);
 
             double screenAspectRatio = ((double)screenSize.y) / screenSize.x;
-            double streamAspectRatio = ((double)prefConfig.height) / prefConfig.width;
+            double streamAspectRatio = ((double)resolution.height) / resolution.width;
             if (Math.abs(screenAspectRatio - streamAspectRatio) < 0.001) {
                 LimeLog.info("Stream has compatible aspect ratio with output display");
                 aspectRatioMatch = true;
@@ -775,11 +797,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         if (prefConfig.stretchVideo || aspectRatioMatch) {
             // Set the surface to the size of the video
-            streamView.getHolder().setFixedSize(prefConfig.width, prefConfig.height);
+            streamView.getHolder().setFixedSize(resolution.width, resolution.height);
         }
         else {
             // Set the surface to scale based on the aspect ratio of the stream
-            streamView.setDesiredAspectRatio((double)prefConfig.width / (double)prefConfig.height);
+            streamView.setDesiredAspectRatio((double)resolution.width / (double)resolution.height);
         }
 
         if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_TELEVISION) ||
@@ -1694,6 +1716,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     @Override
     public void connectionStarted() {
+        ResolutionSyncRequester.setResolution(this, Game.this.getIntent().getStringExtra(EXTRA_HOST), prefConfig.fps == 30 ? 60 : prefConfig.fps);
+
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
