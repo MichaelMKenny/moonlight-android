@@ -85,6 +85,8 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.Locale;
+import java.util.Timer;
+import java.util.TimerTask;
 
 class Resolution {
     public int width;
@@ -1716,7 +1718,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     @Override
     public void connectionStarted() {
-        ResolutionSyncRequester.setResolution(this, Game.this.getIntent().getStringExtra(EXTRA_HOST), prefConfig.fps == 30 ? 60 : prefConfig.fps);
+        new Timer().schedule(new TimerTask() {
+            @Override
+            public void run() {
+                ResolutionSyncRequester.setResolution(Game.this, Game.this.getIntent().getStringExtra(EXTRA_HOST), prefConfig.fps == 30 ? 60 : prefConfig.fps);
+            }
+        }, 500);
 
         runOnUiThread(new Runnable() {
             @Override
