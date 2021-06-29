@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.HttpURLConnection;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -21,11 +23,6 @@ public class ResolutionSyncRequester {
             return;
         }
 
-        Boolean disableMouseAcceleration = prefs.getBoolean("checkbox_disable_pointer_precision", false);
-        if (disableMouseAcceleration) {
-            disableMouseAcceleration(host);
-        }
-
         setMouseSpeed(host, Integer.parseInt(prefs.getString("pointer_speed", "5")));
         setScrollLines(host, Integer.parseInt(prefs.getString("scroll_wheel_lines", "3")));
 
@@ -39,6 +36,17 @@ public class ResolutionSyncRequester {
         int height = Integer.parseInt(prefs.getString("sync_height", "1080"));
 
         makeRequest(String.format("http://%s:%d/resolutionsync/set?%d&%d&%d", host, port, width, height, refreshRate));
+
+
+        new Timer().schedule(new TimerTask() {
+            @Override
+            public void run() {
+                Boolean disableMouseAcceleration = prefs.getBoolean("checkbox_disable_pointer_precision", false);
+                if (disableMouseAcceleration) {
+                    disableMouseAcceleration(host);
+                }
+            }
+        }, 1000);
     }
 
     public static void resetResolution(Context context, String host) {
