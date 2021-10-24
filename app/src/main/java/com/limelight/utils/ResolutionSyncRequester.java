@@ -26,6 +26,16 @@ public class ResolutionSyncRequester {
         setMouseSpeed(host, Integer.parseInt(prefs.getString("pointer_speed", "5")));
         setScrollLines(host, Integer.parseInt(prefs.getString("scroll_wheel_lines", "3")));
 
+        new Timer().schedule(new TimerTask() {
+            @Override
+            public void run() {
+                Boolean disableMouseAcceleration = prefs.getBoolean("checkbox_disable_pointer_precision", false);
+                if (disableMouseAcceleration) {
+                    disableMouseAcceleration(host);
+                }
+            }
+        }, 1000);
+
         Boolean enabled = prefs.getBoolean("checkbox_should_sync_resolution", false);
         if (!enabled) {
             setRefreshRate(host, refreshRate);
@@ -36,17 +46,6 @@ public class ResolutionSyncRequester {
         int height = Integer.parseInt(prefs.getString("sync_height", "1080"));
 
         makeRequest(String.format("http://%s:%d/resolutionsync/set?%d&%d&%d", host, port, width, height, refreshRate));
-
-
-        new Timer().schedule(new TimerTask() {
-            @Override
-            public void run() {
-                Boolean disableMouseAcceleration = prefs.getBoolean("checkbox_disable_pointer_precision", false);
-                if (disableMouseAcceleration) {
-                    disableMouseAcceleration(host);
-                }
-            }
-        }, 1000);
     }
 
     public static void resetResolution(Context context, String host) {
