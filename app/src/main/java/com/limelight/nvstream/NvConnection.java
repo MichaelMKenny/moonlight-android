@@ -275,7 +275,7 @@ public class NvConnection {
                 synchronized (MoonBridge.class) {
                     MoonBridge.setupBridge(videoDecoderRenderer, audioRenderer, connectionListener);
                     int ret = MoonBridge.startConnection(context.serverAddress,
-                            context.serverAppVersion, context.serverGfeVersion,
+                            context.serverAppVersion, context.serverGfeVersion, context.rtspSessionUrl,
                             context.negotiatedWidth, context.negotiatedHeight,
                             context.streamConfig.getRefreshRate(), context.streamConfig.getBitrate(),
                             context.streamConfig.getMaxPacketSize(),
@@ -364,6 +364,12 @@ public class NvConnection {
     public void sendMouseHighResScroll(final short scrollAmount) {
         if (!isMonkey) {
             MoonBridge.sendMouseHighResScroll(scrollAmount);
+        }
+    }
+
+    public void sendUtf8Text(final String text) {
+        if (!isMonkey) {
+            MoonBridge.sendUtf8Text(text);
         }
     }
 

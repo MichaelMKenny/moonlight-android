@@ -253,6 +253,7 @@ public class MoonBridge {
     }
 
     public static native int startConnection(String address, String appVersion, String gfeVersion,
+                                              String rtspSessionUrl,
                                               int width, int height, int fps,
                                               int bitrate, int packetSize, int streamingRemotely,
                                               int audioConfiguration, boolean supportsHevc,
@@ -289,6 +290,8 @@ public class MoonBridge {
     public static native void sendMouseScroll(byte scrollClicks);
 
     public static native void sendMouseHighResScroll(short scrollAmount);
+
+    public static native void sendUtf8Text(String text);
 
     public static native String getStageName(int stage);
 
