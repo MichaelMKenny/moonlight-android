@@ -182,6 +182,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     public static final String EXTRA_HOST = "Host";
     public static final String EXTRA_APP_NAME = "AppName";
     public static final String EXTRA_APP_ID = "AppId";
+    public static final String EXTRA_RUNNING_APP_ID = "CurrentAppId";
     public static final String EXTRA_UNIQUEID = "UniqueId";
     public static final String EXTRA_PC_UUID = "UUID";
     public static final String EXTRA_PC_NAME = "PcName";
@@ -1782,7 +1783,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     @Override
     public void connectionStarted() {
-        ResolutionSyncRequester.setResolution(this, Game.this.getIntent().getStringExtra(EXTRA_HOST), prefConfig.fps == 30 ? 60 : prefConfig.fps);
+        int appId = Game.this.getIntent().getIntExtra(EXTRA_APP_ID, StreamConfiguration.INVALID_APP_ID);
+        int runningAppId = Game.this.getIntent().getIntExtra(EXTRA_RUNNING_APP_ID, StreamConfiguration.INVALID_APP_ID);
+        Boolean isRunning = appId == runningAppId;
+
+        int refreshRate = prefConfig.fps == 30 ? 60 : prefConfig.fps;
+
+        ResolutionSyncRequester.setResolution(this, Game.this.getIntent().getStringExtra(EXTRA_HOST), refreshRate, isRunning);
 
         runOnUiThread(new Runnable() {
             @Override
