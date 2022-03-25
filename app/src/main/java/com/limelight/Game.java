@@ -298,7 +298,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         String uniqueId = Game.this.getIntent().getStringExtra(EXTRA_UNIQUEID);
         String uuid = Game.this.getIntent().getStringExtra(EXTRA_PC_UUID);
         String pcName = Game.this.getIntent().getStringExtra(EXTRA_PC_NAME);
-        boolean willStreamHdr = Game.this.getIntent().getBooleanExtra(EXTRA_APP_HDR, false);
+        boolean appSupportsHdr = Game.this.getIntent().getBooleanExtra(EXTRA_APP_HDR, false);
         byte[] derCertData = Game.this.getIntent().getByteArrayExtra(EXTRA_SERVER_CERT);
 
         X509Certificate serverCert = null;
@@ -324,7 +324,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         shortcutHelper.reportComputerShortcutUsed(computer);
         if (appName != null) {
             // This may be null if launched from the "Resume Session" PC context menu item
-            shortcutHelper.reportGameLaunched(computer, new NvApp(appName, appId, willStreamHdr));
+            shortcutHelper.reportGameLaunched(computer, new NvApp(appName, appId, appSupportsHdr));
         }
 
         // Initialize the MediaCodec helper before creating the decoder
@@ -332,41 +332,32 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         MediaCodecHelper.initialize(this, glPrefs.glRenderer);
 
         // Check if the user has enabled HDR
+        boolean willStreamHdr = false;
         if (prefConfig.enableHdr) {
-            // Check if the app supports it
-            if (!willStreamHdr) {
-                Toast.makeText(this, "This game does not support HDR10", Toast.LENGTH_SHORT).show();
-            }
-            // It does, so start our HDR checklist
-            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                // We already know the app supports HDR if willStreamHdr is set.
+            // Start our HDR checklist
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 Display display = getWindowManager().getDefaultDisplay();
                 Display.HdrCapabilities hdrCaps = display.getHdrCapabilities();
 
                 // We must now ensure our display is compatible with HDR10
-                boolean foundHdr10 = false;
                 if (hdrCaps != null) {
                     // getHdrCapabilities() returns null on Lenovo Lenovo Mirage Solo (vega), Android 8.0
                     for (int hdrType : hdrCaps.getSupportedHdrTypes()) {
                         if (hdrType == Display.HdrCapabilities.HDR_TYPE_HDR10) {
-                            foundHdr10 = true;
+                            willStreamHdr = true;
+                            break;
                         }
                     }
                 }
 
-                if (!foundHdr10) {
+                if (!willStreamHdr) {
                     // Nope, no HDR for us :(
-                    willStreamHdr = false;
                     Toast.makeText(this, "Display does not support HDR10", Toast.LENGTH_LONG).show();
                 }
             }
             else {
                 Toast.makeText(this, "HDR requires Android 7.0 or later", Toast.LENGTH_LONG).show();
-                willStreamHdr = false;
             }
-        }
-        else {
-            willStreamHdr = false;
         }
 
         // Check if the user has enabled performance stats overlay
@@ -421,58 +412,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         float displayRefreshRate = prepareDisplayForRendering();
         LimeLog.info("Display refresh rate: "+displayRefreshRate);
 
-        // HACK: Despite many efforts to ensure low latency consistent frame
-        // delivery, the best non-lossy mechanism is to buffer 1 extra frame
-        // in the output pipeline. Android does some buffering on its end
-        // in SurfaceFlinger and it's difficult (impossible?) to inspect
-        // the precise state of the buffer queue to the screen after we
-        // release a frame for rendering.
-        //
-        // Since buffering a frame adds latency and we are primarily a
-        // latency-optimized client, rather than one designed for picture-perfect
-        // accuracy, we will synthetically induce a negative pressure on the display
-        // output pipeline by driving the decoder input pipeline under the speed
-        // that the display can refresh. This ensures a constant negative pressure
-        // to keep latency down but does induce a periodic frame loss. However, this
-        // periodic frame loss is *way* less than what we'd already get in Marshmallow's
-        // display pipeline where frames are dropped outside of our control if they land
-        // on the same V-sync.
-        //
-        // Hopefully, we can get rid of this once someone comes up with a better way
-        // to track the state of the pipeline and time frames.
-        int roundedRefreshRate = Math.round(displayRefreshRate);
-        int chosenFrameRate = prefConfig.fps;
-        if (!prefConfig.disableFrameDrop || prefConfig.unlockFps) {
-            if (Build.DEVICE.equals("coral") || Build.DEVICE.equals("flame")) {
-                // HACK: Pixel 4 (XL) ignores the preferred display mode and lowers refresh rate,
-                // causing frame pacing issues. See https://issuetracker.google.com/issues/143401475
-                // To work around this, use frame drop mode if we want to stream at >= 60 FPS.
-                if (prefConfig.fps >= 60) {
-                    LimeLog.info("Using Pixel 4 rendering hack");
-                    decoderRenderer.enableLegacyFrameDropRendering();
-                }
-            }
-            else if (prefConfig.fps >= roundedRefreshRate) {
-                if (prefConfig.unlockFps) {
-                    // Use frame drops when rendering above the screen frame rate
-                    decoderRenderer.enableLegacyFrameDropRendering();
-                    LimeLog.info("Using drop mode for FPS > Hz");
-                } else if (roundedRefreshRate <= 49) {
-                    // Let's avoid clearly bogus refresh rates and fall back to legacy rendering
-                    decoderRenderer.enableLegacyFrameDropRendering();
-                    LimeLog.info("Bogus refresh rate: " + roundedRefreshRate);
-                }
-                // HACK: Avoid crashing on some MTK devices
-                else if (decoderRenderer.isBlacklistedForFrameRate(roundedRefreshRate - 1)) {
-                    // Use the old rendering strategy on these broken devices
-                    decoderRenderer.enableLegacyFrameDropRendering();
-                } else {
-                    chosenFrameRate = roundedRefreshRate - 1;
-                    LimeLog.info("Adjusting FPS target for screen to " + chosenFrameRate);
-                }
-            }
-        }
-
         boolean vpnActive = NetHelper.isActiveNetworkVpn(this);
         if (vpnActive) {
             LimeLog.info("Detected active network is a VPN");
@@ -481,8 +420,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(resolution.width, resolution.height)
                 .setLaunchRefreshRate(prefConfig.fps)
-                .setRefreshRate(chosenFrameRate)
-                .setApp(new NvApp(appName != null ? appName : "app", appId, willStreamHdr))
+                .setRefreshRate(prefConfig.fps)
+                .setApp(new NvApp(appName != null ? appName : "app", appId, appSupportsHdr))
                 .setBitrate(prefConfig.bitrate)
                 .setEnableSops(prefConfig.enableSops)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
@@ -652,23 +591,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // lifted while focus was not on us. Clear the modifier state.
         this.modifierFlags = 0;
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Capture is lost when focus is lost, so it must be requested again
-            // when focus is regained.
-            if (inputCaptureProvider.isCapturingEnabled() && hasFocus) {
-                // Recapture the pointer if focus was regained. On Android Q,
-                // we have to delay a bit before requesting capture because otherwise
-                // we'll hit the "requestPointerCapture called for a window that has no focus"
-                // error and it will not actually capture the cursor.
-                Handler h = new Handler();
-                h.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        streamView.requestPointerCapture();
-                    }
-                }, 500);
-            }
-        }
+        // With Android native pointer capture, capture is lost when focus is lost,
+        // so it must be requested again when focus is regained.
+        inputCaptureProvider.onWindowFocusChanged(hasFocus);
     }
 
     private boolean isRefreshRateGoodMatch(float refreshRate) {
@@ -1851,6 +1776,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         LimeLog.info(String.format((Locale)null, "Rumble on gamepad %d: %04x %04x", controllerNumber, lowFreqMotor, highFreqMotor));
 
         controllerHandler.handleRumble(controllerNumber, lowFreqMotor, highFreqMotor);
+    }
+
+    @Override
+    public void setHdrMode(boolean enabled) {
+        LimeLog.info("Display HDR mode: " + (enabled ? "enabled" : "disabled"));
+        decoderRenderer.setHdrMode(enabled);
     }
 
     @Override
