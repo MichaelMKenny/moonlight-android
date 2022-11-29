@@ -9,10 +9,8 @@ import java.io.InputStreamReader;
 import java.io.Reader;
 import java.io.StringReader;
 import java.net.InetAddress;
-import java.net.MalformedURLException;
+import java.net.Proxy;
 import java.net.Socket;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.security.KeyManagementException;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
@@ -53,6 +51,7 @@ import com.limelight.nvstream.ConnectionContext;
 import com.limelight.nvstream.http.PairingManager.PairState;
 
 import okhttp3.ConnectionPool;
+import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -63,19 +62,22 @@ public class NvHTTP {
     private String uniqueId;
     private PairingManager pm;
 
-    public static final int HTTPS_PORT = 47984;
-    public static final int HTTP_PORT = 47989;
-    public static final int CONNECTION_TIMEOUT = 3000;
-    public static final int READ_TIMEOUT = 5000;
+    private static final int DEFAULT_HTTPS_PORT = 47984;
+    public static final int DEFAULT_HTTP_PORT = 47989;
+    public static final int SHORT_CONNECTION_TIMEOUT = 3000;
+    public static final int LONG_CONNECTION_TIMEOUT = 5000;
+    public static final int READ_TIMEOUT = 7000;
 
     // Print URL and content to logcat on debug builds
     private static boolean verbose = BuildConfig.DEBUG;
 
-    public String baseUrlHttps;
-    public String baseUrlHttp;
+    private HttpUrl baseUrlHttp;
+
+    private int httpsPort;
     
-    private OkHttpClient httpClient;
-    private OkHttpClient httpClientWithReadTimeout;
+    private OkHttpClient httpClientLongConnectTimeout;
+    private OkHttpClient httpClientLongConnectNoReadTimeout;
+    private OkHttpClient httpClientShortConnectTimeout;
 
     private X509TrustManager defaultTrustManager;
     private X509TrustManager trustManager;
@@ -168,19 +170,34 @@ public class NvHTTP {
             }
         };
 
-        httpClient = new OkHttpClient.Builder()
+        httpClientLongConnectTimeout = new OkHttpClient.Builder()
                 .connectionPool(new ConnectionPool(0, 1, TimeUnit.MILLISECONDS))
                 .hostnameVerifier(hv)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
-                .connectTimeout(CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS)
-                .build();
-        
-        httpClientWithReadTimeout = httpClient.newBuilder()
                 .readTimeout(READ_TIMEOUT, TimeUnit.MILLISECONDS)
+                .connectTimeout(LONG_CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS)
+                .proxy(Proxy.NO_PROXY)
+                .build();
+
+        httpClientShortConnectTimeout = httpClientLongConnectTimeout.newBuilder()
+                .connectTimeout(SHORT_CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS)
+                .build();
+
+        httpClientLongConnectNoReadTimeout = httpClientLongConnectTimeout.newBuilder()
+                .readTimeout(0, TimeUnit.MILLISECONDS)
                 .build();
     }
+
+    public HttpUrl getHttpsUrl(boolean likelyOnline) throws IOException {
+        if (httpsPort == 0) {
+            // Fetch the HTTPS port if we don't have it already
+            httpsPort = getHttpsPort(openHttpConnectionToString(likelyOnline ? httpClientLongConnectTimeout : httpClientShortConnectTimeout,
+                    baseUrlHttp, "serverinfo"));
+        }
+
+        return new HttpUrl.Builder().scheme("https").host(baseUrlHttp.host()).port(httpsPort).build();
+    }
     
-    public NvHTTP(String address, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
+    public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
         // Use the same UID for all Moonlight clients so we can quit games
         // started by other Moonlight clients.
         this.uniqueId = "0123456789ABCDEF";
@@ -189,23 +206,23 @@ public class NvHTTP {
 
         initializeHttpState(cryptoProvider);
 
+        this.httpsPort = httpsPort;
+
         try {
-            // The URI constructor takes care of escaping IPv6 literals
-            this.baseUrlHttps = new URI("https", null, address, HTTPS_PORT, null, null, null).toString();
-            this.baseUrlHttp = new URI("http", null, address, HTTP_PORT, null, null, null).toString();
-        } catch (URISyntaxException e) {
-            // Encapsulate URISyntaxException into IOException for callers to handle more easily
+            this.baseUrlHttp = new HttpUrl.Builder()
+                    .scheme("http")
+                    .host(address.address)
+                    .port(address.port)
+                    .build();
+        } catch (IllegalArgumentException e) {
+            // Encapsulate IllegalArgumentException into IOException for callers to handle more easily
             throw new IOException(e);
         }
 
         this.pm = new PairingManager(this, cryptoProvider);
     }
-    
-    String buildUniqueIdUuidString() {
-        return "uniqueid="+uniqueId+"&uuid="+UUID.randomUUID();
-    }
-    
-    static String getXmlString(Reader r, String tagname) throws XmlPullParserException, IOException {
+
+    static String getXmlString(Reader r, String tagname, boolean throwIfMissing) throws XmlPullParserException, IOException {
         XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
         factory.setNamespaceAware(true);
         XmlPullParser xpp = factory.newPullParser();
@@ -234,11 +251,19 @@ public class NvHTTP {
             eventType = xpp.next();
         }
 
+        if (throwIfMissing) {
+            // We throw an XmlPullParserException here for ease of handling in all the various callers.
+            // We could also throw an IOException, but some callers expect those in cases where the
+            // host may not be reachable. We want to distinguish unreachable hosts vs. hosts that
+            // are returning garbage XML to us, so we use XmlPullParserException instead.
+            throw new XmlPullParserException("Missing mandatory field in host response: "+tagname);
+        }
+
         return null;
     }
 
-    static String getXmlString(String str, String tagname) throws XmlPullParserException, IOException {
-        return getXmlString(new StringReader(str), tagname);
+    static String getXmlString(String str, String tagname, boolean throwIfMissing) throws XmlPullParserException, IOException {
+        return getXmlString(new StringReader(str), tagname, throwIfMissing);
     }
     
     private static void verifyResponseStatus(XmlPullParser xpp) throws GfeHttpResponseException {
@@ -259,8 +284,11 @@ public class NvHTTP {
         }
     }
     
-    public String getServerInfo() throws IOException, XmlPullParserException {
+    public String getServerInfo(boolean likelyOnline) throws IOException, XmlPullParserException {
         String resp;
+
+        // If we believe the PC is online, give it a little extra time to respond
+        OkHttpClient client = likelyOnline ? httpClientLongConnectTimeout : httpClientShortConnectTimeout;
         
         //
         // TODO: Shield Hub uses HTTP for this and is able to get an accurate PairStatus with HTTP.
@@ -272,7 +300,7 @@ public class NvHTTP {
         if (serverCert != null) {
             try {
                 try {
-                    resp = openHttpConnectionToString(baseUrlHttps + "/serverinfo?"+buildUniqueIdUuidString(), true);
+                    resp = openHttpConnectionToString(client, getHttpsUrl(likelyOnline), "serverinfo");
                 } catch (SSLHandshakeException e) {
                     // Detect if we failed due to a server cert mismatch
                     if (e.getCause() instanceof CertificateException) {
@@ -292,7 +320,7 @@ public class NvHTTP {
             catch (GfeHttpResponseException e) {
                 if (e.getErrorCode() == 401) {
                     // Cert validation error - fall back to HTTP
-                    return openHttpConnectionToString(baseUrlHttp + "/serverinfo", true);
+                    return openHttpConnectionToString(client, baseUrlHttp, "serverinfo");
                 }
 
                 // If it's not a cert validation error, throw it
@@ -303,29 +331,42 @@ public class NvHTTP {
         }
         else {
             // No pinned cert, so use HTTP
-            return openHttpConnectionToString(baseUrlHttp + "/serverinfo", true);
+            return openHttpConnectionToString(client, baseUrlHttp, "serverinfo");
         }
     }
+
+    private static ComputerDetails.AddressTuple makeTuple(String address, int port) {
+        if (address == null) {
+            return null;
+        }
+
+        return new ComputerDetails.AddressTuple(address, port);
+    }
     
-    public ComputerDetails getComputerDetails() throws IOException, XmlPullParserException {
+    public ComputerDetails getComputerDetails(boolean likelyOnline) throws IOException, XmlPullParserException {
         ComputerDetails details = new ComputerDetails();
-        String serverInfo = getServerInfo();
+        String serverInfo = getServerInfo(likelyOnline);
         
-        details.name = getXmlString(serverInfo, "hostname");
+        details.name = getXmlString(serverInfo, "hostname", false);
         if (details.name == null || details.name.isEmpty()) {
             details.name = "UNKNOWN";
         }
 
-        details.uuid = getXmlString(serverInfo, "uniqueid");
-        details.macAddress = getXmlString(serverInfo, "mac");
-        details.localAddress = getXmlString(serverInfo, "LocalIP");
+        // UUID is mandatory to determine which machine is responding
+        details.uuid = getXmlString(serverInfo, "uniqueid", true);
 
-        // This may be null, but that's okay
-        details.remoteAddress = getXmlString(serverInfo, "ExternalIP");
+        details.httpsPort = getHttpsPort(serverInfo);
 
-        // This has some extra logic to always report unpaired if the pinned cert isn't there
+        details.macAddress = getXmlString(serverInfo, "mac", false);
+
+        // FIXME: Do we want to use the current port?
+        details.localAddress = makeTuple(getXmlString(serverInfo, "LocalIP", false), baseUrlHttp.port());
+
+        // This is missing on on recent GFE versions, but it's present on Sunshine
+        details.externalPort = getExternalPort(serverInfo);
+        details.remoteAddress = makeTuple(getXmlString(serverInfo, "ExternalIP", false), details.externalPort);
+
         details.pairState = getPairState(serverInfo);
-        
         details.runningGameId = getCurrentGame(serverInfo);
         
         // We could reach it so it's online
@@ -357,20 +398,27 @@ public class NvHTTP {
         }
     }
 
+    private HttpUrl getCompleteUrl(HttpUrl baseUrl, String path, String query) {
+        return baseUrl.newBuilder()
+                .addPathSegment(path)
+                .query(query)
+                .addQueryParameter("uniqueid", uniqueId)
+                .addQueryParameter("uuid", UUID.randomUUID().toString())
+                .build();
+    }
+
+    private ResponseBody openHttpConnection(OkHttpClient client, HttpUrl baseUrl, String path) throws IOException {
+        return openHttpConnection(client, baseUrl, path, null);
+    }
+
     // Read timeout should be enabled for any HTTP query that requires no outside action
     // on the GFE server. Examples of queries that DO require outside action are launch, resume, and quit.
     // The initial pair query does require outside action (user entering a PIN) but subsequent pairing
     // queries do not.
-    private ResponseBody openHttpConnection(String url, boolean enableReadTimeout) throws IOException {
-        Request request = new Request.Builder().url(url).get().build();
-        Response response;
-
-        if (enableReadTimeout) {
-            response = performAndroidTlsHack(httpClientWithReadTimeout).newCall(request).execute();
-        }
-        else {
-            response = performAndroidTlsHack(httpClient).newCall(request).execute();
-        }
+    private ResponseBody openHttpConnection(OkHttpClient client, HttpUrl baseUrl, String path, String query) throws IOException {
+        HttpUrl completeUrl = getCompleteUrl(baseUrl, path, query);
+        Request request = new Request.Builder().url(completeUrl).get().build();
+        Response response = performAndroidTlsHack(client).newCall(request).execute();
 
         ResponseBody body = response.body();
         
@@ -384,30 +432,31 @@ public class NvHTTP {
         }
         
         if (response.code() == 404) {
-            throw new FileNotFoundException(url);
+            throw new FileNotFoundException(completeUrl.toString());
         }
         else {
             throw new GfeHttpResponseException(response.code(), response.message());
         }
     }
-    
-    String openHttpConnectionToString(String url, boolean enableReadTimeout) throws IOException {
-        try {
-            if (verbose) {
-                LimeLog.info("Requesting URL: "+url);
-            }
 
-            ResponseBody resp = openHttpConnection(url, enableReadTimeout);
+    private String openHttpConnectionToString(OkHttpClient client, HttpUrl baseUrl, String path) throws IOException {
+        return openHttpConnectionToString(client, baseUrl, path, null);
+    }
+
+    private String openHttpConnectionToString(OkHttpClient client, HttpUrl baseUrl, String path, String query) throws IOException {
+        try {
+            ResponseBody resp = openHttpConnection(client, baseUrl, path, query);
             String respString = resp.string();
             resp.close();
 
-            if (verbose) {
-                LimeLog.info(url+" -> "+respString);
+            if (verbose && !path.equals("serverinfo")) {
+                LimeLog.info(getCompleteUrl(baseUrl, path, query)+" -> "+respString);
             }
 
             return respString;
         } catch (IOException e) {
-            if (verbose) {
+            if (verbose && !path.equals("serverinfo")) {
+                LimeLog.warning(getCompleteUrl(baseUrl, path, query)+" -> "+e.getMessage());
                 e.printStackTrace();
             }
             
@@ -416,23 +465,23 @@ public class NvHTTP {
     }
 
     public String getServerVersion(String serverInfo) throws XmlPullParserException, IOException {
-        return getXmlString(serverInfo, "appversion");
+        // appversion is present in all supported GFE versions
+        return getXmlString(serverInfo, "appversion", true);
     }
 
     public PairingManager.PairState getPairState() throws IOException, XmlPullParserException {
-        return getPairState(getServerInfo());
+        return getPairState(getServerInfo(true));
     }
 
     public PairingManager.PairState getPairState(String serverInfo) throws IOException, XmlPullParserException {
-        if (!NvHTTP.getXmlString(serverInfo, "PairStatus").equals("1")) {
-            return PairState.NOT_PAIRED;
-        }
-
-        return PairState.PAIRED;
+        // appversion is present in all supported GFE versions
+        return NvHTTP.getXmlString(serverInfo, "PairStatus", true).equals("1") ?
+                PairState.PAIRED : PairState.NOT_PAIRED;
     }
     
     public long getMaxLumaPixelsH264(String serverInfo) throws XmlPullParserException, IOException {
-        String str = getXmlString(serverInfo, "MaxLumaPixelsH264");
+        // MaxLumaPixelsH264 wasn't present on old GFE versions
+        String str = getXmlString(serverInfo, "MaxLumaPixelsH264", false);
         if (str != null) {
             return Long.parseLong(str);
         } else {
@@ -441,7 +490,8 @@ public class NvHTTP {
     }
     
     public long getMaxLumaPixelsHEVC(String serverInfo) throws XmlPullParserException, IOException {
-        String str = getXmlString(serverInfo, "MaxLumaPixelsHEVC");
+        // MaxLumaPixelsHEVC wasn't present on old GFE versions
+        String str = getXmlString(serverInfo, "MaxLumaPixelsHEVC", false);
         if (str != null) {
             return Long.parseLong(str);
         } else {
@@ -458,7 +508,8 @@ public class NvHTTP {
     // Bit 10: HEVC Main10 4:4:4
     // Bit 11: ???
     public long getServerCodecModeSupport(String serverInfo) throws XmlPullParserException, IOException {
-        String str = getXmlString(serverInfo, "ServerCodecModeSupport");
+        // ServerCodecModeSupport wasn't present on old GFE versions
+        String str = getXmlString(serverInfo, "ServerCodecModeSupport", false);
         if (str != null) {
             return Long.parseLong(str);
         } else {
@@ -467,16 +518,18 @@ public class NvHTTP {
     }
     
     public String getGpuType(String serverInfo) throws XmlPullParserException, IOException {
-        return getXmlString(serverInfo, "gputype");
+        // ServerCodecModeSupport wasn't present on old GFE versions
+        return getXmlString(serverInfo, "gputype", false);
     }
 
     public String getGfeVersion(String serverInfo) throws XmlPullParserException, IOException {
-        return getXmlString(serverInfo, "GfeVersion");
+        // ServerCodecModeSupport wasn't present on old GFE versions
+        return getXmlString(serverInfo, "GfeVersion", false);
     }
     
     public boolean supports4K(String serverInfo) throws XmlPullParserException, IOException {
-        // Only allow 4K on GFE 3.x
-        String gfeVersionStr = getXmlString(serverInfo, "GfeVersion");
+        // Only allow 4K on GFE 3.x. GfeVersion wasn't present on very old versions of GFE.
+        String gfeVersionStr = getXmlString(serverInfo, "GfeVersion", false);
         if (gfeVersionStr == null || gfeVersionStr.startsWith("2.")) {
             return false;
         }
@@ -488,13 +541,37 @@ public class NvHTTP {
         // GFE 2.8 started keeping currentgame set to the last game played. As a result, it no longer
         // has the semantics that its name would indicate. To contain the effects of this change as much
         // as possible, we'll force the current game to zero if the server isn't in a streaming session.
-        String serverState = getXmlString(serverInfo, "state");
-        if (serverState != null && serverState.endsWith("_SERVER_BUSY")) {
-            String game = getXmlString(serverInfo, "currentgame");
-            return Integer.parseInt(game);
+        if (getXmlString(serverInfo, "state", true).endsWith("_SERVER_BUSY")) {
+            return Integer.parseInt(getXmlString(serverInfo, "currentgame", true));
         }
         else {
             return 0;
+        }
+    }
+
+    public int getHttpsPort(String serverInfo) {
+        try {
+            return Integer.parseInt(getXmlString(serverInfo, "HttpsPort", true));
+        } catch (XmlPullParserException e) {
+            e.printStackTrace();
+            return DEFAULT_HTTPS_PORT;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return DEFAULT_HTTPS_PORT;
+        }
+    }
+
+    public int getExternalPort(String serverInfo) {
+        // This is an extension which is not present in GFE. It is present for Sunshine to be able
+        // to support dynamic HTTP WAN ports without requiring the user to manually enter the port.
+        try {
+            return Integer.parseInt(getXmlString(serverInfo, "ExternalPort", true));
+        } catch (XmlPullParserException e) {
+            // Expected on non-Sunshine servers
+            return baseUrlHttp.port();
+        } catch (IOException e) {
+            e.printStackTrace();
+            return baseUrlHttp.port();
         }
     }
 
@@ -588,8 +665,8 @@ public class NvHTTP {
         return appList;
     }
     
-    public String getAppListRaw() throws MalformedURLException, IOException {
-        return openHttpConnectionToString(baseUrlHttps + "/applist?"+buildUniqueIdUuidString(), true);
+    public String getAppListRaw() throws IOException {
+        return openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "applist");
     }
     
     public LinkedList<NvApp> getAppList() throws GfeHttpResponseException, IOException, XmlPullParserException {
@@ -598,20 +675,28 @@ public class NvHTTP {
             return getAppListByReader(new StringReader(getAppListRaw()));
         }
         else {
-            ResponseBody resp = openHttpConnection(baseUrlHttps + "/applist?" + buildUniqueIdUuidString(), true);
-            LinkedList<NvApp> appList = getAppListByReader(new InputStreamReader(resp.byteStream()));
-            resp.close();
-            return appList;
+            try (final ResponseBody resp = openHttpConnection(httpClientLongConnectTimeout, getHttpsUrl(true), "applist")) {
+                return getAppListByReader(new InputStreamReader(resp.byteStream()));
+            }
         }
     }
-    
+
+    String executePairingCommand(String additionalArguments, boolean enableReadTimeout) throws GfeHttpResponseException, IOException {
+        return openHttpConnectionToString(enableReadTimeout ? httpClientLongConnectTimeout : httpClientLongConnectNoReadTimeout,
+                baseUrlHttp, "pair", "devicename=roth&updateState=1&" + additionalArguments);
+    }
+
+    String executePairingChallenge() throws GfeHttpResponseException, IOException {
+        return openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true),
+                "pair", "devicename=roth&updateState=1&phrase=pairchallenge");
+    }
+
     public void unpair() throws IOException {
-        openHttpConnectionToString(baseUrlHttp + "/unpair?"+buildUniqueIdUuidString(), true);
+        openHttpConnectionToString(httpClientLongConnectTimeout, baseUrlHttp, "unpair");
     }
     
     public InputStream getBoxArt(NvApp app) throws IOException {
-        ResponseBody resp = openHttpConnection(baseUrlHttps + "/appasset?"+ buildUniqueIdUuidString() +
-                "&appid=" + app.getAppId() + "&AssetType=2&AssetIdx=0", true);
+        ResponseBody resp = openHttpConnection(httpClientLongConnectTimeout, getHttpsUrl(true), "appasset", "appid=" + app.getAppId() + "&AssetType=2&AssetIdx=0");
         return resp.byteStream();
     }
     
@@ -666,9 +751,8 @@ public class NvHTTP {
             enableSops = false;
         }
 
-        String xmlStr = openHttpConnectionToString(baseUrlHttps +
-            "/launch?" + buildUniqueIdUuidString() +
-            "&appid=" + appId +
+        String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "launch",
+            "appid=" + appId +
             "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + fps +
             "&additionalStates=1&sops=" + (enableSops ? 1 : 0) +
             "&rikey="+bytesToHex(context.riKey.getEncoded()) +
@@ -677,11 +761,10 @@ public class NvHTTP {
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +
             "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo() +
             (context.streamConfig.getAttachedGamepadMask() != 0 ? "&remoteControllersBitmap=" + context.streamConfig.getAttachedGamepadMask() : "") +
-            (context.streamConfig.getAttachedGamepadMask() != 0 ? "&gcmap=" + context.streamConfig.getAttachedGamepadMask() : ""),
-            false);
-        String gameSession = getXmlString(xmlStr, "gamesession");
-        if (gameSession != null && !gameSession.equals("0")) {
-            context.rtspSessionUrl = getXmlString(xmlStr, "sessionUrl0");
+            (context.streamConfig.getAttachedGamepadMask() != 0 ? "&gcmap=" + context.streamConfig.getAttachedGamepadMask() : ""));
+        if (!getXmlString(xmlStr, "gamesession", true).equals("0")) {
+            // sessionUrl0 will be missing for older GFE versions
+            context.rtspSessionUrl = getXmlString(xmlStr, "sessionUrl0", false);
             return true;
         }
         else {
@@ -690,14 +773,13 @@ public class NvHTTP {
     }
     
     public boolean resumeApp(ConnectionContext context) throws IOException, XmlPullParserException {
-        String xmlStr = openHttpConnectionToString(baseUrlHttps + "/resume?" + buildUniqueIdUuidString() +
-                "&rikey="+bytesToHex(context.riKey.getEncoded()) +
+        String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "resume",
+                "rikey="+bytesToHex(context.riKey.getEncoded()) +
                 "&rikeyid="+context.riKeyId +
-                "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo(),
-                false);
-        String resume = getXmlString(xmlStr, "resume");
-        if (Integer.parseInt(resume) != 0) {
-            context.rtspSessionUrl = getXmlString(xmlStr, "sessionUrl0");
+                "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo());
+        if (!getXmlString(xmlStr, "resume", true).equals("0")) {
+            // sessionUrl0 will be missing for older GFE versions
+            context.rtspSessionUrl = getXmlString(xmlStr, "sessionUrl0", false);
             return true;
         }
         else {
@@ -706,15 +788,14 @@ public class NvHTTP {
     }
     
     public boolean quitApp() throws IOException, XmlPullParserException {
-        String xmlStr = openHttpConnectionToString(baseUrlHttps + "/cancel?" + buildUniqueIdUuidString(), false);
-        String cancel = getXmlString(xmlStr, "cancel");
-        if (Integer.parseInt(cancel) == 0) {
+        String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "cancel");
+        if (getXmlString(xmlStr, "cancel", true).equals("0")) {
             return false;
         }
 
         // Newer GFE versions will just return success even if quitting fails
         // if we're not the original requestor.
-        if (getCurrentGame(getServerInfo()) != 0) {
+        if (getCurrentGame(getServerInfo(true)) != 0) {
             // Generate a synthetic GfeResponseException letting the caller know
             // that they can't kill someone else's stream.
             throw new GfeHttpResponseException(599, "");

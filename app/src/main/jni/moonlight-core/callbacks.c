@@ -80,7 +80,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeDrStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStart", "()V");
     BridgeDrStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStop", "()V");
     BridgeDrCleanupMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrCleanup", "()V");
-    BridgeDrSubmitDecodeUnitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitDecodeUnit", "([BIIIJJ)I");
+    BridgeDrSubmitDecodeUnitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitDecodeUnit", "([BIIIIJJ)I");
     BridgeArInitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArInit", "(III)I");
     BridgeArStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStart", "()V");
     BridgeArStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStop", "()V");
@@ -159,8 +159,8 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
 
             ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitDecodeUnitMethod,
                                               DecodedFrameBuffer, currentEntry->length, currentEntry->bufferType,
-                                              decodeUnit->frameNumber, (jlong)decodeUnit->receiveTimeMs,
-                                              (jlong)decodeUnit->enqueueTimeMs);
+                                              decodeUnit->frameNumber, decodeUnit->frameType,
+                                              (jlong)decodeUnit->receiveTimeMs, (jlong)decodeUnit->enqueueTimeMs);
             if ((*env)->ExceptionCheck(env)) {
                 // We will crash here
                 (*JVM)->DetachCurrentThread(JVM);
@@ -180,7 +180,7 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
 
     ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitDecodeUnitMethod,
                                        DecodedFrameBuffer, offset, BUFFER_TYPE_PICDATA,
-                                       decodeUnit->frameNumber,
+                                       decodeUnit->frameNumber, decodeUnit->frameType,
                                        (jlong)decodeUnit->receiveTimeMs, (jlong)decodeUnit->enqueueTimeMs);
     if ((*env)->ExceptionCheck(env)) {
         // We will crash here
@@ -386,7 +386,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
                                                            jint clientRefreshRateX100,
                                                            jint encryptionFlags,
                                                            jbyteArray riAesKey, jbyteArray riAesIv,
-                                                           jint videoCapabilities) {
+                                                           jint videoCapabilities,
+                                                           jint colorSpace, jint colorRange) {
     SERVER_INFORMATION serverInfo = {
             .address = (*env)->GetStringUTFChars(env, address, 0),
             .serverInfoAppVersion = (*env)->GetStringUTFChars(env, appVersion, 0),
@@ -406,6 +407,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
             .hevcBitratePercentageMultiplier = hevcBitratePercentageMultiplier,
             .clientRefreshRateX100 = clientRefreshRateX100,
             .encryptionFlags = encryptionFlags,
+            .colorSpace = colorSpace,
+            .colorRange = colorRange
     };
 
     jbyte* riAesKeyBuf = (*env)->GetByteArrayElements(env, riAesKey, NULL);

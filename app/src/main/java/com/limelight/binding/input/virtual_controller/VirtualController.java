@@ -5,21 +5,20 @@
 package com.limelight.binding.input.virtual_controller;
 
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.RelativeLayout;
 import android.widget.Toast;
 
+import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.binding.input.ControllerHandler;
-import com.limelight.nvstream.NvConnection;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Timer;
-import java.util.TimerTask;
 
 public class VirtualController {
     public static class ControllerInputContext {
@@ -40,13 +39,18 @@ public class VirtualController {
 
     private static final boolean _PRINT_DEBUG_INFORMATION = false;
 
-    private ControllerHandler controllerHandler;
-    private Context context = null;
+    private final ControllerHandler controllerHandler;
+    private final Context context;
+    private final Handler handler;
+
+    private final Runnable delayedRetransmitRunnable = new Runnable() {
+        @Override
+        public void run() {
+            sendControllerInputContextInternal();
+        }
+    };
 
     private FrameLayout frame_layout = null;
-    private RelativeLayout relative_layout = null;
-
-    private Timer retransmitTimer;
 
     ControllerMode currentMode = ControllerMode.Active;
     ControllerInputContext inputContext = new ControllerInputContext();
@@ -59,10 +63,7 @@ public class VirtualController {
         this.controllerHandler = controllerHandler;
         this.frame_layout = layout;
         this.context = context;
-
-        relative_layout = new RelativeLayout(context);
-
-        frame_layout.addView(relative_layout);
+        this.handler = new Handler(Looper.getMainLooper());
 
         buttonConfigure = new Button(context);
         buttonConfigure.setAlpha(0.25f);
@@ -87,7 +88,7 @@ public class VirtualController {
 
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
 
-                relative_layout.invalidate();
+                buttonConfigure.invalidate();
 
                 for (VirtualControllerElement element : elements) {
                     element.invalidate();
@@ -97,32 +98,33 @@ public class VirtualController {
 
     }
 
+    Handler getHandler() {
+        return handler;
+    }
+
     public void hide() {
-        retransmitTimer.cancel();
-        relative_layout.setVisibility(View.INVISIBLE);
+        for (VirtualControllerElement element : elements) {
+            element.setVisibility(View.INVISIBLE);
+        }
+
+        buttonConfigure.setVisibility(View.INVISIBLE);
     }
 
     public void show() {
-        relative_layout.setVisibility(View.VISIBLE);
+        for (VirtualControllerElement element : elements) {
+            element.setVisibility(View.VISIBLE);
+        }
 
-        // HACK: GFE sometimes discards gamepad packets when they are received
-        // very shortly after another. This can be critical if an axis zeroing packet
-        // is lost and causes an analog stick to get stuck. To avoid this, we send
-        // a gamepad input packet every 100 ms to ensure any loss can be recovered.
-        retransmitTimer = new Timer("OSC timer", true);
-        retransmitTimer.schedule(new TimerTask() {
-            @Override
-            public void run() {
-                sendControllerInputContext();
-            }
-        }, 100, 100);
+        buttonConfigure.setVisibility(View.VISIBLE);
     }
 
     public void removeElements() {
         for (VirtualControllerElement element : elements) {
-            relative_layout.removeView(element);
+            frame_layout.removeView(element);
         }
         elements.clear();
+
+        frame_layout.removeView(buttonConfigure);
     }
 
     public void setOpacity(int opacity) {
@@ -134,10 +136,10 @@ public class VirtualController {
 
     public void addElement(VirtualControllerElement element, int x, int y, int width, int height) {
         elements.add(element);
-        RelativeLayout.LayoutParams layoutParams = new RelativeLayout.LayoutParams(width, height);
+        FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams(width, height);
         layoutParams.setMargins(x, y, 0, 0);
 
-        relative_layout.addView(element, layoutParams);
+        frame_layout.addView(element, layoutParams);
     }
 
     public List<VirtualControllerElement> getElements() {
@@ -146,23 +148,20 @@ public class VirtualController {
 
     private static final void _DBG(String text) {
         if (_PRINT_DEBUG_INFORMATION) {
-            System.out.println("VirtualController: " + text);
+            LimeLog.info("VirtualController: " + text);
         }
     }
 
     public void refreshLayout() {
-        relative_layout.removeAllViews();
         removeElements();
 
         DisplayMetrics screen = context.getResources().getDisplayMetrics();
 
         int buttonSize = (int)(screen.heightPixels*0.06f);
-        RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(buttonSize, buttonSize);
-        params.addRule(RelativeLayout.ALIGN_PARENT_LEFT, RelativeLayout.TRUE);
-        params.addRule(RelativeLayout.ALIGN_PARENT_TOP, RelativeLayout.TRUE);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(buttonSize, buttonSize);
         params.leftMargin = 15;
         params.topMargin = 15;
-        relative_layout.addView(buttonConfigure, params);
+        frame_layout.addView(buttonConfigure, params);
 
         // Start with the default layout
         VirtualControllerConfigurationLoader.createDefaultLayout(this, context);
@@ -179,7 +178,7 @@ public class VirtualController {
         return inputContext;
     }
 
-    void sendControllerInputContext() {
+    private void sendControllerInputContextInternal() {
         _DBG("INPUT_MAP + " + inputContext.inputMap);
         _DBG("LEFT_TRIGGER " + inputContext.leftTrigger);
         _DBG("RIGHT_TRIGGER " + inputContext.rightTrigger);
@@ -197,5 +196,20 @@ public class VirtualController {
                     inputContext.rightTrigger
             );
         }
+    }
+
+    void sendControllerInputContext() {
+        // Cancel retransmissions of prior gamepad inputs
+        handler.removeCallbacks(delayedRetransmitRunnable);
+
+        sendControllerInputContextInternal();
+
+        // HACK: GFE sometimes discards gamepad packets when they are received
+        // very shortly after another. This can be critical if an axis zeroing packet
+        // is lost and causes an analog stick to get stuck. To avoid this, we retransmit
+        // the gamepad state a few times unless another input event happens before then.
+        handler.postDelayed(delayedRetransmitRunnable, 25);
+        handler.postDelayed(delayedRetransmitRunnable, 50);
+        handler.postDelayed(delayedRetransmitRunnable, 75);
     }
 }

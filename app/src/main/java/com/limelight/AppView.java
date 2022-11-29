@@ -294,6 +294,11 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
 
         setContentView(R.layout.activity_app_view);
 
+        // Allow floating expanded PiP overlays while browsing apps
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setShouldDockBigOverlays(false);
+        }
+
         UiHelper.notifyNewRootView(this);
 
         showHiddenApps = getIntent().getBooleanExtra(SHOW_HIDDEN_APPS_EXTRA, false);
@@ -461,7 +466,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                                 app.app, managerBinder, new Runnable() {
                             @Override
                             public void run() {
-                                ResolutionSyncRequester.resetResolution(AppView.this, AppView.this.computer.activeAddress);
+                                ResolutionSyncRequester.resetResolution(AppView.this, AppView.this.computer.activeAddress.address);
 
                                 // Trigger a poll immediately
                                 suspendGridUpdates = false;

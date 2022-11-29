@@ -5,8 +5,6 @@ import java.io.OutputStream;
 import java.io.StringReader;
 import java.net.Inet4Address;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.net.UnknownHostException;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -49,8 +47,7 @@ public class ComputerManagerService extends Service {
     private static final int APPLIST_POLLING_PERIOD_MS = 30000;
     private static final int APPLIST_FAILED_POLLING_RETRY_MS = 2000;
     private static final int MDNS_QUERY_PERIOD_MS = 1000;
-    private static final int FAST_POLL_TIMEOUT = 1000;
-    private static final int OFFLINE_POLL_TRIES = 5;
+    private static final int OFFLINE_POLL_TRIES = 3;
     private static final int INITIAL_POLL_TRIES = 2;
     private static final int EMPTY_LIST_THRESHOLD = 3;
     private static final int POLL_DATA_TTL_MS = 30000;
@@ -66,6 +63,8 @@ public class ComputerManagerService extends Service {
     private final AtomicInteger activePolls = new AtomicInteger(0);
     private boolean pollingActive = false;
     private final Lock defaultNetworkLock = new ReentrantLock();
+
+    private ConnectivityManager.NetworkCallback networkCallback;
 
     private DiscoveryService.DiscoveryBinder discoveryBinder;
     private final ServiceConnection discoveryServiceConnection = new ServiceConnection() {
@@ -142,7 +141,7 @@ public class ComputerManagerService extends Service {
                     // then use STUN to populate the external address field if
                     // it's not set already.
                     if (details.remoteAddress == null) {
-                        InetAddress addr = InetAddress.getByName(details.activeAddress);
+                        InetAddress addr = InetAddress.getByName(details.activeAddress.address);
                         if (addr.isSiteLocalAddress()) {
                             populateExternalAddress(details);
                         }
@@ -232,7 +231,13 @@ public class ComputerManagerService extends Service {
                         // Wait for the bind notification
                         discoveryServiceConnection.wait(1000);
                     }
-                } catch (InterruptedException ignored) {
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+
+                    // InterruptedException clears the thread's interrupt status. Since we can't
+                    // handle that here, we will re-interrupt the thread to set the interrupt
+                    // status back to true.
+                    Thread.currentThread().interrupt();
                 }
             }
         }
@@ -241,11 +246,18 @@ public class ComputerManagerService extends Service {
             while (activePolls.get() != 0) {
                 try {
                     Thread.sleep(250);
-                } catch (InterruptedException ignored) {}
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+
+                    // InterruptedException clears the thread's interrupt status. Since we can't
+                    // handle that here, we will re-interrupt the thread to set the interrupt
+                    // status back to true.
+                    Thread.currentThread().interrupt();
+                }
             }
         }
 
-        public boolean addComputerBlocking(ComputerDetails fakeDetails) {
+        public boolean addComputerBlocking(ComputerDetails fakeDetails) throws InterruptedException {
             return ComputerManagerService.this.addComputerBlocking(fakeDetails);
         }
 
@@ -359,7 +371,12 @@ public class ComputerManagerService extends Service {
 
         // Perform the STUN request if we're not on a VPN or if we bound to a network
         if (!activeNetworkIsVpn || boundToNetwork) {
-            details.remoteAddress = NvConnection.findExternalAddressForMdns("stun.moonlight-stream.org", 3478);
+            String stunResolvedAddress = NvConnection.findExternalAddressForMdns("stun.moonlight-stream.org", 3478);
+            if (stunResolvedAddress != null) {
+                // We don't know for sure what the external port is, so we will have to guess.
+                // When we contact the PC (if we haven't already), it will update the port.
+                details.remoteAddress = new ComputerDetails.AddressTuple(stunResolvedAddress, details.guessExternalPort());
+            }
         }
 
         // Unbind from the network
@@ -386,7 +403,7 @@ public class ComputerManagerService extends Service {
 
                 // Populate the computer template with mDNS info
                 if (computer.getLocalAddress() != null) {
-                    details.localAddress = computer.getLocalAddress().getHostAddress();
+                    details.localAddress = new ComputerDetails.AddressTuple(computer.getLocalAddress().getHostAddress(), computer.getPort());
 
                     // Since we're on the same network, we can use STUN to find
                     // our WAN address, which is also very likely the WAN address
@@ -396,12 +413,21 @@ public class ComputerManagerService extends Service {
                     }
                 }
                 if (computer.getIpv6Address() != null) {
-                    details.ipv6Address = computer.getIpv6Address().getHostAddress();
+                    details.ipv6Address = new ComputerDetails.AddressTuple(computer.getIpv6Address().getHostAddress(), computer.getPort());
                 }
 
-                // Kick off a serverinfo poll on this machine
-                if (!addComputerBlocking(details)) {
-                    LimeLog.warning("Auto-discovered PC failed to respond: "+details);
+                try {
+                    // Kick off a blocking serverinfo poll on this machine
+                    if (!addComputerBlocking(details)) {
+                        LimeLog.warning("Auto-discovered PC failed to respond: "+details);
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+
+                    // InterruptedException clears the thread's interrupt status. Since we can't
+                    // handle that here, we will re-interrupt the thread to set the interrupt
+                    // status back to true.
+                    Thread.currentThread().interrupt();
                 }
             }
 
@@ -449,28 +475,25 @@ public class ComputerManagerService extends Service {
         }
     }
 
-    public boolean addComputerBlocking(ComputerDetails fakeDetails) {
+    public boolean addComputerBlocking(ComputerDetails fakeDetails) throws InterruptedException {
         // Block while we try to fill the details
-        try {
-            // We cannot use runPoll() here because it will attempt to persist the state of the machine
-            // in the database, which would be bad because we don't have our pinned cert loaded yet.
-            if (pollComputer(fakeDetails)) {
-                // See if we have record of this PC to pull its pinned cert
-                synchronized (pollingTuples) {
-                    for (PollingTuple tuple : pollingTuples) {
-                        if (tuple.computer.uuid.equals(fakeDetails.uuid)) {
-                            fakeDetails.serverCert = tuple.computer.serverCert;
-                            break;
-                        }
+
+        // We cannot use runPoll() here because it will attempt to persist the state of the machine
+        // in the database, which would be bad because we don't have our pinned cert loaded yet.
+        if (pollComputer(fakeDetails)) {
+            // See if we have record of this PC to pull its pinned cert
+            synchronized (pollingTuples) {
+                for (PollingTuple tuple : pollingTuples) {
+                    if (tuple.computer.uuid.equals(fakeDetails.uuid)) {
+                        fakeDetails.serverCert = tuple.computer.serverCert;
+                        break;
                     }
                 }
-
-                // Poll again, possibly with the pinned cert, to get accurate pairing information.
-                // This will insert the host into the database too.
-                runPoll(fakeDetails, true, 0);
             }
-        } catch (InterruptedException e) {
-            return false;
+
+            // Poll again, possibly with the pinned cert, to get accurate pairing information.
+            // This will insert the host into the database too.
+            runPoll(fakeDetails, true, 0);
         }
 
         // If the machine is reachable, it was successful
@@ -527,17 +550,21 @@ public class ComputerManagerService extends Service {
         }
     }
 
-    private ComputerDetails tryPollIp(ComputerDetails details, String address) {
-        // Fast poll this address first to determine if we can connect at the TCP layer
-        if (!fastPollIp(address)) {
-            return null;
-        }
-
+    private ComputerDetails tryPollIp(ComputerDetails details, ComputerDetails.AddressTuple address) {
         try {
-            NvHTTP http = new NvHTTP(address, idManager.getUniqueId(), details.serverCert,
+            // If the current address's port number matches the active address's port number, we can also assume
+            // the HTTPS port will also match. This assumption is currently safe because Sunshine sets all ports
+            // as offsets from the base HTTP port and doesn't allow custom HttpsPort responses for WAN vs LAN.
+            boolean portMatchesActiveAddress = details.state == ComputerDetails.State.ONLINE &&
+                    details.activeAddress != null && address.port == details.activeAddress.port;
+
+            NvHTTP http = new NvHTTP(address, portMatchesActiveAddress ? details.httpsPort : 0, idManager.getUniqueId(), details.serverCert,
                     PlatformBinding.getCryptoProvider(ComputerManagerService.this));
 
-            ComputerDetails newDetails = http.getComputerDetails();
+            // If this PC is currently online at this address, extend the timeouts to allow more time for the PC to respond.
+            boolean isLikelyOnline = details.state == ComputerDetails.State.ONLINE && address.equals(details.activeAddress);
+
+            ComputerDetails newDetails = http.getComputerDetails(isLikelyOnline);
 
             // Check if this is the PC we expected
             if (newDetails.uuid == null) {
@@ -551,146 +578,140 @@ public class ComputerManagerService extends Service {
                 return null;
             }
 
-            // Set the new active address
-            newDetails.activeAddress = address;
-
             return newDetails;
-        } catch (XmlPullParserException | IOException e) {
+        } catch (XmlPullParserException e) {
             e.printStackTrace();
+            return null;
+        } catch (IOException e) {
             return null;
         }
     }
 
-    // Just try to establish a TCP connection to speculatively detect a running
-    // GFE server
-    private boolean fastPollIp(String address) {
-        if (address == null) {
-            // Don't bother if our address is null
-            return false;
+    private static class ParallelPollTuple {
+        public ComputerDetails.AddressTuple address;
+        public ComputerDetails existingDetails;
+
+        public boolean complete;
+        public Thread pollingThread;
+        public ComputerDetails returnedDetails;
+
+        public ParallelPollTuple(ComputerDetails.AddressTuple address, ComputerDetails existingDetails) {
+            this.address = address;
+            this.existingDetails = existingDetails;
         }
 
-        Socket s = new Socket();
-        try {
-            s.connect(new InetSocketAddress(address, NvHTTP.HTTPS_PORT), FAST_POLL_TIMEOUT);
-            s.close();
-            return true;
-        } catch (IOException e) {
-            return false;
+        public void interrupt() {
+            if (pollingThread != null) {
+                pollingThread.interrupt();
+            }
         }
     }
 
-    private void startFastPollThread(final String address, final boolean[] info) {
-        Thread t = new Thread() {
+    private void startParallelPollThread(ParallelPollTuple tuple, HashSet<ComputerDetails.AddressTuple> uniqueAddresses) {
+        // Don't bother starting a polling thread for an address that doesn't exist
+        // or if the address has already been polled with an earlier tuple
+        if (tuple.address == null || !uniqueAddresses.add(tuple.address)) {
+            tuple.complete = true;
+            tuple.returnedDetails = null;
+            return;
+        }
+
+        tuple.pollingThread = new Thread() {
             @Override
             public void run() {
-                boolean pollRes = fastPollIp(address);
+                ComputerDetails details = tryPollIp(tuple.existingDetails, tuple.address);
 
-                synchronized (info) {
-                    info[0] = true; // Done
-                    info[1] = pollRes; // Polling result
+                synchronized (tuple) {
+                    tuple.complete = true; // Done
+                    tuple.returnedDetails = details; // Polling result
 
-                    info.notify();
+                    tuple.notify();
                 }
             }
         };
-        t.setName("Fast Poll - "+address);
-        t.start();
+        tuple.pollingThread.setName("Parallel Poll - "+tuple.address+" - "+tuple.existingDetails.name);
+        tuple.pollingThread.start();
     }
 
-    private String fastPollPc(final String localAddress, final String remoteAddress, final String manualAddress, final String ipv6Address) throws InterruptedException {
-        final boolean[] remoteInfo = new boolean[2];
-        final boolean[] localInfo = new boolean[2];
-        final boolean[] manualInfo = new boolean[2];
-        final boolean[] ipv6Info = new boolean[2];
+    private ComputerDetails parallelPollPc(ComputerDetails details) throws InterruptedException {
+        ParallelPollTuple localInfo = new ParallelPollTuple(details.localAddress, details);
+        ParallelPollTuple manualInfo = new ParallelPollTuple(details.manualAddress, details);
+        ParallelPollTuple remoteInfo = new ParallelPollTuple(details.remoteAddress, details);
+        ParallelPollTuple ipv6Info = new ParallelPollTuple(details.ipv6Address, details);
 
-        startFastPollThread(localAddress, localInfo);
-        startFastPollThread(remoteAddress, remoteInfo);
-        startFastPollThread(manualAddress, manualInfo);
-        startFastPollThread(ipv6Address, ipv6Info);
+        // These must be started in order of precedence for the deduplication algorithm
+        // to result in the correct behavior.
+        HashSet<ComputerDetails.AddressTuple> uniqueAddresses = new HashSet<>();
+        startParallelPollThread(localInfo, uniqueAddresses);
+        startParallelPollThread(manualInfo, uniqueAddresses);
+        startParallelPollThread(remoteInfo, uniqueAddresses);
+        startParallelPollThread(ipv6Info, uniqueAddresses);
 
-        // Check local first
-        synchronized (localInfo) {
-            while (!localInfo[0]) {
-                localInfo.wait(500);
+        try {
+            // Check local first
+            synchronized (localInfo) {
+                while (!localInfo.complete) {
+                    localInfo.wait();
+                }
+
+                if (localInfo.returnedDetails != null) {
+                    localInfo.returnedDetails.activeAddress = localInfo.address;
+                    return localInfo.returnedDetails;
+                }
             }
 
-            if (localInfo[1]) {
-                return localAddress;
-            }
-        }
+            // Now manual
+            synchronized (manualInfo) {
+                while (!manualInfo.complete) {
+                    manualInfo.wait();
+                }
 
-        // Now manual
-        synchronized (manualInfo) {
-            while (!manualInfo[0]) {
-                manualInfo.wait(500);
-            }
-
-            if (manualInfo[1]) {
-                return manualAddress;
-            }
-        }
-
-        // Now remote IPv4
-        synchronized (remoteInfo) {
-            while (!remoteInfo[0]) {
-                remoteInfo.wait(500);
+                if (manualInfo.returnedDetails != null) {
+                    manualInfo.returnedDetails.activeAddress = manualInfo.address;
+                    return manualInfo.returnedDetails;
+                }
             }
 
-            if (remoteInfo[1]) {
-                return remoteAddress;
-            }
-        }
+            // Now remote IPv4
+            synchronized (remoteInfo) {
+                while (!remoteInfo.complete) {
+                    remoteInfo.wait();
+                }
 
-        // Now global IPv6
-        synchronized (ipv6Info) {
-            while (!ipv6Info[0]) {
-                ipv6Info.wait(500);
+                if (remoteInfo.returnedDetails != null) {
+                    remoteInfo.returnedDetails.activeAddress = remoteInfo.address;
+                    return remoteInfo.returnedDetails;
+                }
             }
 
-            if (ipv6Info[1]) {
-                return ipv6Address;
+            // Now global IPv6
+            synchronized (ipv6Info) {
+                while (!ipv6Info.complete) {
+                    ipv6Info.wait();
+                }
+
+                if (ipv6Info.returnedDetails != null) {
+                    ipv6Info.returnedDetails.activeAddress = ipv6Info.address;
+                    return ipv6Info.returnedDetails;
+                }
             }
+        } finally {
+            // Stop any further polling if we've found a working address or we've been
+            // interrupted by an attempt to stop polling.
+            localInfo.interrupt();
+            manualInfo.interrupt();
+            remoteInfo.interrupt();
+            ipv6Info.interrupt();
         }
 
         return null;
     }
 
     private boolean pollComputer(ComputerDetails details) throws InterruptedException {
-        ComputerDetails polledDetails;
-
-        // Do a TCP-level connection to the HTTP server to see if it's listening.
-        // Do not write this address to details.activeAddress because:
-        // a) it's only a candidate and may be wrong (multiple PCs behind a single router)
-        // b) if it's null, it will be unexpectedly nulling the activeAddress of a possibly online PC
-        LimeLog.info("Starting fast poll for "+details.name+" ("+details.localAddress +", "+details.remoteAddress +", "+details.manualAddress+", "+details.ipv6Address+")");
-        String candidateAddress = fastPollPc(details.localAddress, details.remoteAddress, details.manualAddress, details.ipv6Address);
-        LimeLog.info("Fast poll for "+details.name+" returned candidate address: "+candidateAddress);
-
-        // If no connection could be established to either IP address, there's nothing we can do
-        if (candidateAddress == null) {
-            return false;
-        }
-
-        // Try using the active address from fast-poll
-        polledDetails = tryPollIp(details, candidateAddress);
-        if (polledDetails == null) {
-            // If that failed, try all unique addresses except what we've
-            // already tried
-            HashSet<String> uniqueAddresses = new HashSet<>();
-            uniqueAddresses.add(details.localAddress);
-            uniqueAddresses.add(details.manualAddress);
-            uniqueAddresses.add(details.remoteAddress);
-            uniqueAddresses.add(details.ipv6Address);
-            for (String addr : uniqueAddresses) {
-                if (addr == null || addr.equals(candidateAddress)) {
-                    continue;
-                }
-                polledDetails = tryPollIp(details, addr);
-                if (polledDetails != null) {
-                    break;
-                }
-            }
-        }
+        // Poll all addresses in parallel to speed up the process
+        LimeLog.info("Starting parallel poll for "+details.name+" ("+details.localAddress +", "+details.remoteAddress +", "+details.manualAddress+", "+details.ipv6Address+")");
+        ComputerDetails polledDetails = parallelPollPc(details);
+        LimeLog.info("Parallel poll for "+details.name+" returned address: "+details.activeAddress);
 
         if (polledDetails != null) {
             details.update(polledDetails);
@@ -725,10 +746,49 @@ public class ComputerManagerService extends Service {
         }
 
         releaseLocalDatabaseReference();
+
+        // Monitor for network changes to invalidate our PC state
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            networkCallback = new ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onAvailable(Network network) {
+                    LimeLog.info("Resetting PC state for new available network");
+                    synchronized (pollingTuples) {
+                        for (PollingTuple tuple : pollingTuples) {
+                            tuple.computer.state = ComputerDetails.State.UNKNOWN;
+                            if (listener != null) {
+                                listener.notifyComputerUpdated(tuple.computer);
+                            }
+                        }
+                    }
+                }
+
+                @Override
+                public void onLost(Network network) {
+                    LimeLog.info("Offlining PCs due to network loss");
+                    synchronized (pollingTuples) {
+                        for (PollingTuple tuple : pollingTuples) {
+                            tuple.computer.state = ComputerDetails.State.OFFLINE;
+                            if (listener != null) {
+                                listener.notifyComputerUpdated(tuple.computer);
+                            }
+                        }
+                    }
+                }
+            };
+
+            ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            connMgr.registerDefaultNetworkCallback(networkCallback);
+        }
     }
 
     @Override
     public void onDestroy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            connMgr.unregisterNetworkCallback(networkCallback);
+        }
+
         if (discoveryBinder != null) {
             // Unbind from the discovery service
             unbindService(discoveryServiceConnection);
@@ -816,7 +876,7 @@ public class ComputerManagerService extends Service {
                         PollingTuple tuple = getPollingTuple(computer);
 
                         try {
-                            NvHTTP http = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer), idManager.getUniqueId(),
+                            NvHTTP http = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer), computer.httpsPort, idManager.getUniqueId(),
                                     computer.serverCert, PlatformBinding.getCryptoProvider(ComputerManagerService.this));
 
                             String appList;
@@ -844,18 +904,12 @@ public class ComputerManagerService extends Service {
                             if (!appList.isEmpty() &&
                                     (!list.isEmpty() || emptyAppListResponses >= EMPTY_LIST_THRESHOLD)) {
                                 // Open the cache file
-                                OutputStream cacheOut = null;
-                                try {
-                                    cacheOut = CacheHelper.openCacheFileForOutput(getCacheDir(), "applist", computer.uuid);
+                                try (final OutputStream cacheOut = CacheHelper.openCacheFileForOutput(
+                                        getCacheDir(), "applist", computer.uuid)
+                                ) {
                                     CacheHelper.writeStringToOutputStream(cacheOut, appList);
                                 } catch (IOException e) {
                                     e.printStackTrace();
-                                } finally {
-                                    try {
-                                        if (cacheOut != null) {
-                                            cacheOut.close();
-                                        }
-                                    } catch (IOException ignored) {}
                                 }
 
                                 // Reset empty count if it wasn't empty this time

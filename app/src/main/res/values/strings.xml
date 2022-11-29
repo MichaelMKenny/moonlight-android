@@ -1,8 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_label" translatable="false">Moonlight</string>
-    <string name="app_label_root" translatable="false">Moonlight (Root)</string>
-
     <!-- Shortcut strings -->
     <string name="scut_deleted_pc">PC deleted</string>
     <string name="scut_not_paired">PC not paired</string>
@@ -77,6 +74,7 @@
     <string name="no_video_received_error">No video received from host.</string>
     <string name="no_frame_received_error">Your network connection isn\'t performing well. Reduce your video bitrate setting or try a faster connection.</string>
     <string name="early_termination_error">Something went wrong on your host PC when starting the stream.\n\nMake sure you don\'t have any DRM-protected content open on your host PC. You can also try restarting your host PC.\n\nIf the issue persists, try reinstalling your GPU drivers and GeForce Experience.</string>
+    <string name="frame_conversion_error">The host PC reported a fatal video encoding error.\n\nTry disabling HDR mode, changing the streaming resolution, or changing your host PC\'s display resolution.</string>
     <string name="check_ports_msg">Check your firewall and port forwarding rules for port(s):</string>
 
     <!-- Start application messages -->
@@ -155,10 +153,14 @@
     <string name="title_checkbox_stretch_video">Stretch video to full-screen</string>
     <string name="resolution_prefix_native">Native</string>
     <string name="resolution_prefix_native_fullscreen">Native Full-Screen</string>
+    <string name="resolution_prefix_native_landscape">(Landscape)</string>
+    <string name="resolution_prefix_native_portrait">(Portrait)</string>
 
     <string name="category_audio_settings">Audio Settings</string>
     <string name="title_audio_config_list">Surround sound configuration</string>
     <string name="summary_audio_config_list">Enable 5.1 or 7.1 surround sound for home-theater systems</string>
+    <string name="title_checkbox_enable_audiofx">Enable system equalizer support</string>
+    <string name="summary_checkbox_enable_audiofx">Allows audio effects to function while streaming, but may increase audio latency</string>
 
     <string name="category_input_settings">Input Settings</string>
     <string name="title_checkbox_touchscreen_trackpad">Use the touchscreen as a trackpad</string>
@@ -168,6 +170,7 @@
     <string name="title_checkbox_vibrate_fallback">Emulate rumble support with vibration</string>
     <string name="summary_checkbox_vibrate_fallback">Vibrates your device to emulate rumble if your gamepad does not support it</string>
     <string name="title_seekbar_deadzone">Adjust analog stick deadzone</string>
+    <string name="summary_seekbar_deadzone">Note: Some games can enforce a larger deadzone than what Moonlight is configured to use.</string>
     <string name="suffix_seekbar_deadzone">%</string>
     <string name="title_checkbox_xb1_driver">Xbox 360/One USB gamepad driver</string>
     <string name="summary_checkbox_xb1_driver">Enables a built-in USB driver for devices without native Xbox controller support</string>
@@ -179,6 +182,8 @@
     <string name="summary_checkbox_mouse_nav_buttons">Enabling this option may break right clicking on some buggy devices</string>
     <string name="title_checkbox_flip_face_buttons">Flip face buttons</string>
     <string name="summary_checkbox_flip_face_buttons">Switches the face buttons A/B and X/Y for gamepads and the on-screen controls</string>
+    <string name="title_checkbox_absolute_mouse_mode">Remote desktop mouse mode</string>
+    <string name="summary_checkbox_absolute_mouse_mode">This can make mouse acceleration behave more naturally for remote desktop usage, but it is incompatible with many games.</string>
 
     <string name="category_on_screen_controls_settings">On-screen Controls Settings</string>
     <string name="title_checkbox_show_onscreen_controls">Show on-screen controls</string>
@@ -214,6 +219,8 @@
     <string name="category_advanced_settings">Advanced Settings</string>
     <string name="title_unlock_fps">Unlock all possible frame rates</string>
     <string name="summary_unlock_fps">Streaming at 90 or 120 FPS may reduce latency on high-end devices but can cause lag or instability on devices that can\'t support it</string>
+    <string name="title_checkbox_reduce_refresh_rate">Allow refresh rate reduction</string>
+    <string name="summary_checkbox_reduce_refresh_rate">Lower display refresh rates can save power at the expense of some additional video latency</string>
     <string name="title_checkbox_disable_warnings">Disable warning messages</string>
     <string name="summary_checkbox_disable_warnings">Disable on-screen connection warning messages while streaming</string>
     <string name="title_disable_frame_drop">Never drop frames</string>
@@ -226,6 +233,14 @@
     <string name="summary_enable_perf_overlay">Display real-time stream performance information while streaming</string>
     <string name="title_enable_post_stream_toast">Show latency message after streaming</string>
     <string name="summary_enable_post_stream_toast">Display a latency information message after the stream ends</string>
+
+    <string name="category_help">Help</string>
+    <string name="title_setup_guide">Setup guide</string>
+    <string name="summary_setup_guide">View instructions on how to set up your gaming PC for streaming</string>
+    <string name="title_troubleshooting">Troubleshooting guide</string>
+    <string name="summary_troubleshooting">View tips for diagnosing and fixing common streaming issues</string>
+    <string name="title_privacy_policy">Privacy policy</string>
+    <string name="summary_privacy_policy">View Moonlight\'s privacy policy</string>
 
     <!-- Array strings -->
     <string name="resolution_360p">360p</string>
@@ -244,7 +259,7 @@
     <string name="audioconf_51surround">5.1 Surround Sound</string>
     <string name="audioconf_71surround">7.1 Surround Sound</string>
 
-    <string name="videoformat_hevcauto">Use HEVC only if stable</string>
+    <string name="videoformat_hevcauto">Automatic</string>
     <string name="videoformat_hevcalways">Always use HEVC (may crash)</string>
     <string name="videoformat_hevcnever">Never use HEVC</string>
 
@@ -252,5 +267,6 @@
     <string name="summary_frame_pacing">Specify how to balance video latency and smoothness</string>
     <string name="pacing_latency">Prefer lowest latency</string>
     <string name="pacing_balanced">Balanced</string>
+    <string name="pacing_balanced_alt">Balanced with FPS limit</string>
     <string name="pacing_smoothness">Prefer smoothest video (may significantly increase latency)</string>
 </resources>

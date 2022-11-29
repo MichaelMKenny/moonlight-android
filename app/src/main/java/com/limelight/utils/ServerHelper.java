@@ -27,7 +27,10 @@ import java.security.cert.CertificateEncodingException;
 public class ServerHelper {
     public static final String CONNECTION_TEST_SERVER = "android.conntest.moonlight-stream.org";
 
-    public static String getCurrentAddressFromComputer(ComputerDetails computer) {
+    public static ComputerDetails.AddressTuple getCurrentAddressFromComputer(ComputerDetails computer) throws IOException {
+        if (computer.activeAddress == null) {
+            throw new IOException("No active address for "+computer.name);
+        }
         return computer.activeAddress;
     }
 
@@ -53,7 +56,9 @@ public class ServerHelper {
     public static Intent createStartIntent(Activity parent, NvApp app, ComputerDetails computer,
                                            ComputerManagerService.ComputerManagerBinder managerBinder) {
         Intent intent = new Intent(parent, Game.class);
-        intent.putExtra(Game.EXTRA_HOST, getCurrentAddressFromComputer(computer));
+        intent.putExtra(Game.EXTRA_HOST, computer.activeAddress.address);
+        intent.putExtra(Game.EXTRA_PORT, computer.activeAddress.port);
+        intent.putExtra(Game.EXTRA_HTTPS_PORT, computer.httpsPort);
         intent.putExtra(Game.EXTRA_APP_NAME, app.getAppName());
         intent.putExtra(Game.EXTRA_APP_ID, app.getAppId());
         intent.putExtra(Game.EXTRA_RUNNING_APP_ID, computer.runningGameId);
@@ -73,8 +78,7 @@ public class ServerHelper {
 
     public static void doStart(Activity parent, NvApp app, ComputerDetails computer,
                                ComputerManagerService.ComputerManagerBinder managerBinder) {
-        if (computer.state == ComputerDetails.State.OFFLINE ||
-                ServerHelper.getCurrentAddressFromComputer(computer) == null) {
+        if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
             Toast.makeText(parent, parent.getResources().getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
             return;
         }
@@ -125,7 +129,7 @@ public class ServerHelper {
                 NvHTTP httpConn;
                 String message;
                 try {
-                    httpConn = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),
+                    httpConn = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer), computer.httpsPort,
                             managerBinder.getUniqueId(), computer.serverCert, PlatformBinding.getCryptoProvider(parent));
                     if (httpConn.quitApp()) {
                         message = parent.getResources().getString(R.string.applist_quit_success) + " " + app.getAppName();

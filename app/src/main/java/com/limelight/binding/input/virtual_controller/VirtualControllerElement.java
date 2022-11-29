@@ -12,7 +12,7 @@ import android.graphics.Paint;
 import android.util.DisplayMetrics;
 import android.view.MotionEvent;
 import android.view.View;
-import android.widget.RelativeLayout;
+import android.widget.FrameLayout;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -72,7 +72,7 @@ public abstract class VirtualControllerElement extends View {
         int newPos_x = (int) getX() + x - pressed_x;
         int newPos_y = (int) getY() + y - pressed_y;
 
-        RelativeLayout.LayoutParams layoutParams = (RelativeLayout.LayoutParams) getLayoutParams();
+        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
 
         layoutParams.leftMargin = newPos_x > 0 ? newPos_x : 0;
         layoutParams.topMargin = newPos_y > 0 ? newPos_y : 0;
@@ -83,7 +83,7 @@ public abstract class VirtualControllerElement extends View {
     }
 
     protected void resizeElement(int pressed_x, int pressed_y, int width, int height) {
-        RelativeLayout.LayoutParams layoutParams = (RelativeLayout.LayoutParams) getLayoutParams();
+        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
 
         int newHeight = height + (startSize_y - pressed_y);
         int newWidth = width + (startSize_x - pressed_x);
@@ -223,13 +223,21 @@ public abstract class VirtualControllerElement extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        // Ignore secondary touches on controls
+        //
+        // NB: We can get an additional pointer down if the user touches a non-StreamView area
+        // while also touching an OSC control, even if that pointer down doesn't correspond to
+        // an area of the OSC control.
+        if (event.getActionIndex() != 0) {
+            return true;
+        }
+
         if (virtualController.getControllerMode() == VirtualController.ControllerMode.Active) {
             return onElementTouchEvent(event);
         }
 
         switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
-            case MotionEvent.ACTION_POINTER_DOWN: {
+            case MotionEvent.ACTION_DOWN: {
                 position_pressed_x = event.getX();
                 position_pressed_y = event.getY();
                 startSize_x = getWidth();
@@ -267,8 +275,7 @@ public abstract class VirtualControllerElement extends View {
                 return true;
             }
             case MotionEvent.ACTION_CANCEL:
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_POINTER_UP: {
+            case MotionEvent.ACTION_UP: {
                 actionCancel();
                 return true;
             }
@@ -316,7 +323,7 @@ public abstract class VirtualControllerElement extends View {
     public JSONObject getConfiguration() throws JSONException {
         JSONObject configuration = new JSONObject();
 
-        RelativeLayout.LayoutParams layoutParams = (RelativeLayout.LayoutParams) getLayoutParams();
+        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
 
         configuration.put("LEFT", layoutParams.leftMargin);
         configuration.put("TOP", layoutParams.topMargin);
@@ -327,7 +334,7 @@ public abstract class VirtualControllerElement extends View {
     }
 
     public void loadConfiguration(JSONObject configuration) throws JSONException {
-        RelativeLayout.LayoutParams layoutParams = (RelativeLayout.LayoutParams) getLayoutParams();
+        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
 
         layoutParams.leftMargin = configuration.getInt("LEFT");
         layoutParams.topMargin = configuration.getInt("TOP");

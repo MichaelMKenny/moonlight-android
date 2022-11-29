@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<PreferenceScreen xmlns:tools="http://schemas.android.com/tools"
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:seekbar="http://schemas.moonlight-stream.com/apk/res/seekbar">
 
     <PreferenceCategory android:title="@string/category_basic_settings"
@@ -50,15 +49,21 @@
             android:entries="@array/audio_config_names"
             android:entryValues="@array/audio_config_values"
             android:defaultValue="2" />
+        <CheckBoxPreference
+            android:key="checkbox_enable_audiofx"
+            android:title="@string/title_checkbox_enable_audiofx"
+            android:summary="@string/summary_checkbox_enable_audiofx"
+            android:defaultValue="false" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_input_settings"
         android:key="category_input_settings">
-        <!--com.limelight.preferences.SeekBarPreference
+        <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_deadzone"
-            android:defaultValue="15"
-            android:max="50"
+            android:defaultValue="7"
+            android:max="20"
+            android:summary="@string/summary_seekbar_deadzone"
             android:text="@string/suffix_seekbar_deadzone"
-            android:title="@string/title_seekbar_deadzone"/-->
+            android:title="@string/title_seekbar_deadzone"/>
         <CheckBoxPreference
             android:key="checkbox_touchscreen_trackpad"
             android:title="@string/title_checkbox_touchscreen_trackpad"
@@ -99,6 +104,11 @@
             android:key="checkbox_flip_face_buttons"
             android:title="@string/title_checkbox_flip_face_buttons"
             android:summary="@string/summary_checkbox_flip_face_buttons"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_absolute_mouse_mode"
+            android:title="@string/title_checkbox_absolute_mouse_mode"
+            android:summary="@string/summary_checkbox_absolute_mouse_mode"
             android:defaultValue="false" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_on_screen_controls_settings"
@@ -160,7 +170,7 @@
             android:title="@string/title_checkbox_enable_pip"
             android:summary="@string/summary_checkbox_enable_pip"
             android:defaultValue="false" />
-        <ListPreference
+        <com.limelight.preferences.LanguagePreference
             android:key="list_languages"
             android:title="@string/title_language_list"
             android:entries="@array/language_names"
@@ -178,6 +188,11 @@
             android:key="checkbox_unlock_fps"
             android:title="@string/title_unlock_fps"
             android:summary="@string/summary_unlock_fps"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_reduce_refresh_rate"
+            android:title="@string/title_checkbox_reduce_refresh_rate"
+            android:summary="@string/summary_checkbox_reduce_refresh_rate"
             android:defaultValue="false" />
         <CheckBoxPreference
             android:key="checkbox_disable_warnings"
@@ -247,4 +262,19 @@
             android:singleLine="true"
             android:title="Scroll wheel lines" />
     </PreferenceCategory>
+    <!--PreferenceCategory android:title="@string/category_help"
+     android:key="category_help">
+     <com.limelight.preferences.WebLauncherPreference
+     android:title="@string/title_setup_guide"
+     android:summary="@string/summary_setup_guide"
+     url="https://github.com/moonlight-stream/moonlight-docs/wiki/Setup-Guide"/>
+     <com.limelight.preferences.WebLauncherPreference
+     android:title="@string/title_troubleshooting"
+     android:summary="@string/summary_troubleshooting"
+     url="https://github.com/moonlight-stream/moonlight-docs/wiki/Troubleshooting"/>
+     <com.limelight.preferences.WebLauncherPreference
+     android:title="@string/title_privacy_policy"
+     android:summary="@string/summary_privacy_policy"
+     url="https://moonlight-stream.org/privacy.html"/>
+     </PreferenceCategory-->
 </PreferenceScreen>
